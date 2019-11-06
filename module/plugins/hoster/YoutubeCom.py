@@ -206,7 +206,7 @@ class Ffmpeg(object):
 class YoutubeCom(Hoster):
     __name__ = "YoutubeCom"
     __type__ = "hoster"
-    __version__ = "0.69"
+    __version__ = "0.72"
     __status__ = "testing"
 
     __pattern__ = r'https?://(?:[^/]*\.)?(?:youtu\.be/|youtube\.com/watch\?(?:.*&)?v=)[\w\-]+'
@@ -298,32 +298,37 @@ class YoutubeCom(Hoster):
         #     player_url = json.loads(re.search(r'"assets":.+?"js":\s*("[^"]+")',self.data).group(1))
         # except (AttributeError, IndexError):
         #     self.fail(_("Player URL not found"))
-        player_url = self.player_config['assets']['js']
-
-        if player_url.startswith("//"):
-            player_url = 'https:' + player_url
+        player_url = self.fixurl(self.player_config['assets']['js'])
 
         if not player_url.endswith(".js"):
             self.fail(_("Unsupported player type %s") % player_url)
 
+        m = re.match(r'.*?-([a-zA-Z0-9_-]+)(?:/watch_as3|/html5player(?:-new)?|(?:/[a-z]{2,3}_[A-Z]{2})?/base)?\.[a-z]+$', player_url)
+        if m is None:
+            self.fail(_("Cannot identify player ID %s") % player_url)
+
+        sig_cache_id = m.group(1) + "_" + ".".join(str(len(part)) for part in encrypted_sig.split('.'))
+
         cache_info = self.db.retrieve("cache")
         cache_dirty = False
 
-        if cache_info is None or 'version' not in cache_info or cache_info[
-                'version'] != self.__version__:
+        if cache_info is None or cache_info.get('version') != self.__version__:
             cache_info = {'version': self.__version__,
                           'cache': {}}
             cache_dirty = True
 
-        if player_url in cache_info['cache'] and time.time() < cache_info['cache'][player_url]['time'] + 24 * 60 * 60:
+        if sig_cache_id in cache_info['cache'] and time.time() < cache_info['cache'][sig_cache_id]['time'] + 24 * 60 * 60:
             self.log_debug("Using cached decode function to decrypt the URL")
-            decrypt_func = lambda s: ''.join(s[_i] for _i in cache_info['cache'][player_url]['decrypt_map'])
+            decrypt_func = lambda s: ''.join(s[_i] for _i in cache_info['cache'][sig_cache_id]['decrypt_map'])
             decrypted_sig = decrypt_func(encrypted_sig)
 
         else:
             player_data = self.load(self.fixurl(player_url))
 
-            m = re.search(r'\.sig\|\|(?P<sig>[a-zA-Z0-9$]+)\(', player_data) or \
+            m = re.search(r'\b[cs]\s*&&\s*[adf]\.set\([^,]+\s*,\s*encodeURIComponent\s*\(\s*(?P<sig>[a-zA-Z0-9$]+)\(', player_data) or \
+                re.search(r'\b[a-zA-Z0-9]+\s*&&\s*[a-zA-Z0-9]+\.set\([^,]+\s*,\s*encodeURIComponent\s*\(\s*(?P<sig>[a-zA-Z0-9$]+)\(', player_data) or \
+                re.search(r'(?P<sig>[a-zA-Z0-9$]+)\s*=\s*function\(\s*a\s*\)\s*{\s*a\s*=\s*a\.split\(\s*""\s*\)', player_data) or \
+                re.search(r'\.sig\|\|(?P<sig>[a-zA-Z0-9$]+)\(', player_data) or \
                 re.search(r'\bc\s*&&\s*d\.set\([^,]+\s*,\s*\([^)]*\)\s*\(\s*(?P<sig>[a-zA-Z0-9$]+)\(', player_data) or \
                 re.search(r'(["\'])signature\1\s*,\s*(?P<sig>[a-zA-Z0-9$]+)\(', player_data)
 
@@ -340,8 +345,8 @@ class YoutubeCom(Hoster):
                 #: Since Youtube just scrambles the order of the characters in the signature
                 #: and does not change any byte value, we can store just a transformation map as a cached function
                 decrypt_map = [ord(c) for c in decrypt_func(''.join(map(unichr, range(len(encrypted_sig)))))]
-                cache_info['cache'][player_url] = {'decrypt_map': decrypt_map,
-                                                   'time': time.time()}
+                cache_info['cache'][sig_cache_id] = {'decrypt_map': decrypt_map,
+                                                     'time': time.time()}
                 cache_dirty = True
 
                 decrypted_sig = decrypt_func(encrypted_sig)
@@ -420,7 +425,7 @@ class YoutubeCom(Hoster):
             else:
                 signature = video_streams[chosen_fmt][1]
 
-            url += "&signature=" + signature
+            url += "&%s=%s" % (video_streams[chosen_fmt][3], signature)
 
         if "&ratebypass=" not in url:
             url += "&ratebypass=yes"
@@ -488,7 +493,7 @@ class YoutubeCom(Hoster):
             else:
                 signature = audio_streams[chosen_fmt][1]
 
-            url += "&signature=" + signature
+            url += "&%s=%s" % (audio_streams[chosen_fmt][3], signature)
 
         if "&ratebypass=" not in url:
             url += "&ratebypass=yes"
@@ -521,15 +526,32 @@ class YoutubeCom(Hoster):
             body = dom.getElementsByTagName("body")[0]
             paras = body.getElementsByTagName("p")
             for para in paras:
-                srt += str(i) + "\n"
-                srt += _format_srt_time(int(para.attributes['t'].value)) + ' --> ' + \
-                       _format_srt_time(int(para.attributes['t'].value) + int(para.attributes['d'].value)) + "\n"
-                for child in para.childNodes:
-                    if child.nodeName == 'br':
-                        srt += "\n"
-                    elif child.nodeName == '#text':
-                        srt += unicode(child.data)
-                    srt += "\n\n"
+                subtitle_element = str(i) + "\n"
+                try:
+                    subtitle_element += _format_srt_time(int(para.attributes['t'].value)) + ' --> ' + \
+                                _format_srt_time(int(para.attributes['t'].value) + int(para.attributes['d'].value)) + "\n"
+                except KeyError:
+                    continue
+
+                subtitle_text = ""
+                words = para.getElementsByTagName("s")
+                if words:
+                    subtitle_text = "".join([unicode(word.firstChild.data) for word in words])
+
+                else:
+                    for child in para.childNodes:
+                        if child.nodeName == 'br':
+                            subtitle_text += "\n"
+                        elif child.nodeName == '#text':
+                            subtitle_text += unicode(child.data)
+
+                if subtitle_text.strip():
+                    subtitle_element += subtitle_text
+
+                else:
+                    continue
+
+                srt += subtitle_element + "\n\n"
                 i += 1
 
             return srt
@@ -712,7 +734,7 @@ class YoutubeCom(Hoster):
         self.ffmpeg = Ffmpeg(self.config.get('priority') ,self)
 
         #: Set file name
-        self.file_name = self.player_config['args']['title']
+        self.file_name = json.loads(self.player_config['args']['player_response'])['videoDetails']['title']
 
         #: Check for start time
         self.start_time = (0, 0)
@@ -739,7 +761,10 @@ class YoutubeCom(Hoster):
             streams = [(int(_s['itag']),
                         urllib.unquote(_s['url']),
                         _s.get('s', _s.get('sig', None)),
-                        True if 's' in _s else False)
+                        True if 's' in _s else False,
+                        _s.get('sp', "signature"))
+                       for _s in streams]
+            streams = [(_s[0], _s[1], _s[2] and urllib.unquote(_s[2]), _s[3], _s[4])
                        for _s in streams]
 
             self.streams += streams

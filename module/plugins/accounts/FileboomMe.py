@@ -12,22 +12,20 @@ from ..internal.Captcha import Captcha
 from ..internal.misc import json
 
 
-class Keep2ShareCc(Account):
-    __name__ = "Keep2ShareCc"
+class FileboomMe(Account):
+    __name__ = "FileboomMe"
     __type__ = "account"
-    __version__ = "0.16"
+    __version__ = "0.01"
     __status__ = "testing"
 
     __description__ = """Keep2Share.cc account plugin"""
     __license__ = "GPLv3"
-    __authors__ = [("aeronaut", "aeronaut@pianoguy.de"),
-                   ("Walter Purcaro", "vuolter@gmail.com"),
-                   ("GammaC0de", "nitzo2001[AT]yahoo[DOT]com")]
+    __authors__ = [("GammaC0de", "nitzo2001[AT]yahoo[DOT]com")]
 
     RECAPTCHA_KEY = "6LcYcN0SAAAAABtMlxKj7X0hRxOY8_2U86kI1vbb"
 
-    API_URL = "https://keep2share.cc/api/v2/"
-    #: See https://github.com/keep2share/api
+    API_URL = "https://fileboom.me/api/v2/"
+    #: Actually this is Keep2ShareCc API, see https://github.com/keep2share/api
 
     @classmethod
     def api_response(cls, method, **kwargs):
@@ -62,7 +60,7 @@ class Keep2ShareCc(Account):
         except BadHeader, e:
             if e.code == 406:  #: Captcha needed
                 # dummy pyfile
-                pyfile = PyFile(self.pyload.files, -1, "https://k2s.cc", "https://k2s.cc", 0, 0, "", self.classname, -1, -1)
+                pyfile = PyFile(self.pyload.files, -1, "https://fileboom.me", "https://fileboom.me", 0, 0, "", self.classname, -1, -1)
                 pyfile.plugin = self
 
                 errors = [json.loads(m.group(0)).get('errorCode', 0) for m in re.finditer(r'{[^}]+}', e.content)]

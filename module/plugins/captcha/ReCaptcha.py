@@ -29,7 +29,7 @@ except ImportError:
 class ReCaptcha(CaptchaService):
     __name__ = 'ReCaptcha'
     __type__ = 'captcha'
-    __version__ = '0.39'
+    __version__ = '0.42'
     __status__ = 'testing'
 
     __description__ = 'ReCaptcha captcha service plugin'
@@ -39,7 +39,6 @@ class ReCaptcha(CaptchaService):
                    ("Arno-Nymous", None),
                    ("GammaC0de", "nitzo2001[AT]yahoo[DOT]com")]
 
-    KEY_V1_PATTERN = r'(?:recaptcha(?:/api|\.net)/(?:challenge|noscript)\?k=|Recaptcha\.create\s*\(\s*["\'])((?:[\w\-]|%[0-9a-fA-F]{2})+)'
     KEY_V2_PATTERN = r'(?:data-sitekey=["\']|["\']sitekey["\']\s*:\s*["\'])((?:[\w\-]|%[0-9a-fA-F]{2})+)'
 
     STOKEN_V2_PATTERN = r'data-stoken=["\']([\w\-]+)'
@@ -108,7 +107,7 @@ class ReCaptcha(CaptchaService):
     def detect_key(self, data=None):
         html = data or self.retrieve_data()
 
-        m = re.search(self.KEY_V2_PATTERN, html) or re.search(self.KEY_V1_PATTERN, html)
+        m = re.search(self.KEY_V2_PATTERN, html)
         if m is not None:
             self.key = urllib.unquote(m.group(1).strip())
             self.log_debug("Key: %s" % self.key)
@@ -132,14 +131,9 @@ class ReCaptcha(CaptchaService):
     def detect_version(self, data=None):
         data = data or self.retrieve_data()
 
-        v1 = re.search(self.KEY_V1_PATTERN, data) is not None
         v2 = re.search(self.KEY_V2_PATTERN, data) is not None
 
-        if v1 is True and v2 is False:
-            self.log_debug("Detected reCAPTCHA v1")
-            return 1
-
-        elif v1 is False and v2 is True:
+        if v2 is True:
             self.log_debug("Detected reCAPTCHA v2")
             return 2
 
@@ -149,70 +143,15 @@ class ReCaptcha(CaptchaService):
 
     def challenge(self, key=None, data=None, version=None, secure_token=None):
         key = key or self.retrieve_key(data)
-        secure_token = secure_token or self.detect_secure_token(data) if version in (2,'2js') else None
+        secure_token = secure_token or self.detect_secure_token(data) if secure_token is not False else None
 
-        if version in (1, 2, '2js'):
+        if version in (2, '2js'):
             return getattr(self, "_challenge_v%s" % version)(key, secure_token=secure_token)
         else:
             return self.challenge(key,
                                   data,
                                   version=self.detect_version(data=data),
                                   secure_token=secure_token)
-
-    def _challenge_v1(self, key, secure_token=None):
-        html = self.pyfile.plugin.load("http://www.google.com/recaptcha/api/challenge",
-                                       get={'k': key})
-        try:
-            challenge = re.search("challenge : '(.+?)',", html).group(1)
-            server = re.search("server : '(.+?)',", html).group(1)
-
-        except (AttributeError, IndexError):
-            self.fail(_("reCAPTCHA challenge pattern not found"))
-
-        self.log_debug("Challenge: %s" % challenge)
-
-        return self.result(server, challenge, key)
-
-    def result(self, server, challenge, key):
-        self.pyfile.plugin.load("http://www.google.com/recaptcha/api/js/recaptcha.js")
-        html = self.pyfile.plugin.load("http://www.google.com/recaptcha/api/reload",
-                                       get={'c': challenge,
-                                            'k': key,
-                                            'reason': "i",
-                                            'type': "image"})
-
-        try:
-            challenge = re.search('\(\'(.+?)\',', html).group(1)
-
-        except (AttributeError, IndexError):
-            self.fail(_("reCAPTCHA second challenge pattern not found"))
-
-        self.log_debug("Second challenge: %s" % challenge)
-        result = self.decrypt(urlparse.urljoin(server, "image"),
-                              get={'c': challenge},
-                              cookies=True,
-                              input_type="jpg")
-
-        return result, challenge
-
-    def _collect_api_info(self):
-        html = self.pyfile.plugin.load("http://www.google.com/recaptcha/api.js")
-        a = re.search(r'po.src = \'(.*?)\';', html).group(1)
-        vers = a.split("/")[5]
-
-        self.log_debug("API version: %s" % vers)
-
-        language = a.split("__")[1].split(".")[0]
-
-        self.log_debug("API language: %s" % language)
-
-        html = self.pyfile.plugin.load("https://apis.google.com/js/api.js")
-        b = re.search(r'"h":"(.*?)","', html).group(1)
-        jsh = b.decode('unicode-escape')
-
-        self.log_debug("API jsh-string: %s" % jsh)
-
-        return vers, language, jsh
 
     def _prepare_image(self, image, challenge_msg):
         if no_pil:
